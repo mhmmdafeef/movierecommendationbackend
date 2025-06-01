@@ -1,8 +1,14 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from fastapi.middleware.cors import CORSMiddleware
+from dependencis import get_db
+from repository.movie_repository import RatingRepository
+from sqlalchemy.orm import Session
+from services.collaberative_recommendation import Collabrecommendation
+from services.recommendation_service import RecommendationService
+
 
 
 app = FastAPI()
@@ -15,51 +21,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-df = None
-similarity_matrix = None
-index_to_movie_title = {}
-movie_title_to_index = {}
+recservice=RecommendationService()
+colabrecservice=None
 
 # Load data and compute similarity once during startup
 @app.on_event("startup")
-async def load_and_compute_similarity():
-    global df, similarity_matrix, index_to_movie_title, movie_title_to_index
+async def startup():
+    global colabrecservice
+    await recservice.load_and_compute_movie_similarity()
+    await recservice.load_user_profile()
+    colabrecservice=Collabrecommendation(recservice.movie_Id_to_title,recservice.user_id_embedding_map,recservice.embedding_matrix,recservice.movieid_to_index)
 
-    # Load movie data (example: from a CSV file)
-    df = pd.read_csv("C:\\Users\\mhmmd\\Downloads\\movie_embeddings_dataframe.csv")
 
-    # Convert embeddings from strings to numpy arrays
-    df['combined_embedding'] = df['combined_embedding'].apply(convert_embedding_string_to_array)
 
-    # Create maps
-    index_to_movie_title = {i: title for i, title in enumerate(df['Title'])}
-    movie_title_to_index = {title: i for i, title in enumerate(df['Title'])}
+@app.get("/contentbasedrecommendation/")
+def get_recommendations(userId: int,db:Session=Depends(get_db)):
+   
+   return recservice.get_content_based_recommendation(userId,db)
 
-    # Compute similarity matrix
-    embedding_matrix = np.vstack(df['combined_embedding'].values)
-    similarity_matrix = cosine_similarity(embedding_matrix)
 
-@app.get("/recommendations/")
-def get_recommendations(title: str, top_k: int = 10):
-    """
-    Recommend top_k similar movies given a movie title.
-    """
-    if title not in movie_title_to_index:
-        return {"error": f"Movie '{title}' not found in database."}
+@app.get("/collaborativerecommendation/")
+def getcollabrecommendation(userId: int, db:Session=Depends(get_db)):
+    return colabrecservice.get_collaberative_recommendation(userId,db)
+   
 
-    index = movie_title_to_index[title]
-    similar_scores = similarity_matrix[index]
-    sorted_indices = np.argsort(similar_scores)[::-1]
 
-    recommendations = []
-    for i in sorted_indices:
-        if i != index:  # skip the same movie
-            recommendations.append(index_to_movie_title[i])
-        if len(recommendations) >= top_k:
-            break
-    print(recommendations)
-    return {"input_movie": title, "recommended_movies": recommendations}
 
-def convert_embedding_string_to_array(embedding_string):
-    cleaned_string = embedding_string.replace('\n', ' ').strip('[]')
-    return np.array([float(x) for x in cleaned_string.split()])
